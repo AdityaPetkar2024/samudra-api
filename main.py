@@ -1,4 +1,6 @@
 from datetime import date
+import os
+from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
@@ -16,9 +18,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-import os
-from urllib.parse import urlparse
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -161,24 +160,24 @@ def ocean_intelligence(
     cur  = conn.cursor()
 
     try:
-       cur.execute("""
-    SELECT *,
-        ROUND((
-            6371 * acos(LEAST(1.0,
-                cos(radians(%s)) * cos(radians(latitude)) *
-                cos(radians(longitude) - radians(%s)) +
-                sin(radians(%s)) * sin(radians(latitude))
-            ))
-        )::numeric, 1) as distance_km
-    FROM computed_profiles
-    WHERE latitude  BETWEEN %s AND %s
-    AND   longitude BETWEEN %s AND %s
-    AND   measurement_date >= NOW() - INTERVAL '365 days'
-    ORDER BY distance_km
-    LIMIT 1
-""", (lat, lon, lat,
-      lat - 5, lat + 5,
-      lon - 5, lon + 5))
+        cur.execute("""
+            SELECT *,
+                ROUND((
+                    6371 * acos(LEAST(1.0,
+                        cos(radians(%s)) * cos(radians(latitude)) *
+                        cos(radians(longitude) - radians(%s)) +
+                        sin(radians(%s)) * sin(radians(latitude))
+                    ))
+                )::numeric, 1) as distance_km
+            FROM computed_profiles
+            WHERE latitude  BETWEEN %s AND %s
+            AND   longitude BETWEEN %s AND %s
+            AND   measurement_date >= NOW() - INTERVAL '365 days'
+            ORDER BY distance_km
+            LIMIT 1
+        """, (lat, lon, lat,
+              lat - 5, lat + 5,
+              lon - 5, lon + 5))
 
         argo      = cur.fetchone()
         argo_dict = dict(argo) if argo else None
