@@ -17,12 +17,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_CONFIG = {
-    "host": "localhost",
-    "database": "argo_db12",
-    "user": "argo_user1",
-    "password": "argo123"
-}
+import os
+from urllib.parse import urlparse
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if DATABASE_URL:
+    result = urlparse(DATABASE_URL)
+    DB_CONFIG = {
+        "host":     result.hostname,
+        "database": result.path[1:],
+        "user":     result.username,
+        "password": result.password,
+        "port":     result.port
+    }
+else:
+    DB_CONFIG = {
+        "host":     "localhost",
+        "database": "argo_db12",
+        "user":     "argo_user1",
+        "password": "argo123"
+    }
 
 API_KEYS = {"test-key-samudra-v1": "free"}
 
