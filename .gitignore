@@ -1,0 +1,14 @@
+.env
+samudra_deploy.sql
+newfastinsert.py
+fix1_insert.py
+fix_insert.py
+fast_insert.py
+tier1_compute.py
+tier1_store.py
+test1.py
+__pycache__/
+*.pyc
+*.nc
+*.csv
+data/
