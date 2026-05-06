@@ -459,22 +459,25 @@ def search_floats(
 @app.get("/health", tags=["Info"])
 def health():
     """Check API health and data counts."""
-    conn = get_conn()
-    cur  = conn.cursor()
     try:
-        cur.execute("SELECT COUNT(*) as c FROM computed_profiles")
-        computed = cur.fetchone()['c']
-        cur.execute("SELECT COUNT(*) as c FROM profiles")
-        profiles = cur.fetchone()['c']
-        cur.execute("SELECT COUNT(*) as c FROM measurements")
-        measurements = cur.fetchone()['c']
-        return {
-            "status":             "ok",
-            "computed_profiles":  computed,
-            "total_profiles":     profiles,
-            "total_measurements": measurements,
-            "coverage":           "Indian Ocean 2002-2025"
-        }
-    finally:
-        cur.close()
-        conn.close()
+        conn = get_conn()
+        cur  = conn.cursor()
+        try:
+            cur.execute("SELECT COUNT(*) as c FROM computed_profiles")
+            computed = cur.fetchone()['c']
+            cur.execute("SELECT COUNT(*) as c FROM profiles")
+            profiles = cur.fetchone()['c']
+            cur.execute("SELECT COUNT(*) as c FROM floats")
+            floats = cur.fetchone()['c']
+            return {
+                "status":            "ok",
+                "computed_profiles": computed,
+                "total_profiles":    profiles,
+                "total_floats":      floats,
+                "coverage":          "Indian Ocean 2002-2026"
+            }
+        finally:
+            cur.close()
+            conn.close()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {str(e)}")
