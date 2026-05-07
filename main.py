@@ -1,4 +1,5 @@
 from datetime import date
+import datetime
 import os
 from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException
@@ -82,13 +83,12 @@ def root():
         "coverage":     "Northern Indian Ocean (Arabian Sea, Bay of Bengal, Central IO)",
         "data_sources": [
             "INCOIS Argo (587 floats, 14.5M measurements, 2002-2026)",
-            "Copernicus SST/SSH/Chlorophyll (2024)",
+            "Copernicus SST/SSH/Chlorophyll monthly climatology (2024)",
             "IOTC Tuna Catch Records"
         ],
         "computed": [
             "MLD", "ILD", "BLT", "Thermocline", "D20",
-            "TCHP", "N2", "Stratification",
-            "SST Anomaly", "SSH Anomaly", "CHL Anomaly",
+            "TCHP", "SST", "SSH", "Chlorophyll",
             "Upwelling Index", "Productivity Index"
         ],
         "free_tier": "100 calls/day — api_key: test-key-samudra-v1"
@@ -118,6 +118,7 @@ def ocean_intelligence(
 
     conn = get_conn()
     cur  = conn.cursor()
+    current_month = datetime.date.today().month
 
     try:
         # ── 1. Nearest Argo float (within 5°, last 365 days, max 300km) ──
@@ -140,72 +141,67 @@ def ocean_intelligence(
               lat - 5, lat + 5,
               lon - 5, lon + 5))
 
-        argo     = cur.fetchone()
+        argo      = cur.fetchone()
         argo_dict = dict(argo) if argo else None
 
-        # Discard if too far
         if argo_dict and float(argo_dict["distance_km"]) > 300:
             argo_dict = None
 
-        # ── 2. Nearest Copernicus SST + SSH (0.083° grid) ──
+        # ── 2. Copernicus SST + SSH from monthly climatology ──
         cur.execute("""
-            SELECT date, sst, ssh, sst_anomaly, ssh_anomaly
-            FROM copernicus_daily
-            WHERE latitude  BETWEEN %s AND %s
-            AND   longitude BETWEEN %s AND %s
-            AND   sst IS NOT NULL
-            ORDER BY date DESC
+            SELECT avg_sst as sst, avg_ssh as ssh
+            FROM copernicus_monthly
+            WHERE month = %s
+            AND latitude  BETWEEN %s AND %s
+            AND longitude BETWEEN %s AND %s
             LIMIT 1
-        """, (lat - 0.1, lat + 0.1,
+        """, (current_month,
+              lat - 0.1, lat + 0.1,
               lon - 0.1, lon + 0.1))
 
-        cop_sst = cur.fetchone()
+        cop_sst      = cur.fetchone()
         cop_sst_dict = dict(cop_sst) if cop_sst else None
 
-        # ── 3. Nearest Copernicus CHL (0.25° grid) ──
+        # ── 3. Copernicus CHL from monthly climatology ──
         cur.execute("""
-            SELECT date, chl, chl_anomaly
-            FROM copernicus_daily
-            WHERE latitude  BETWEEN %s AND %s
-            AND   longitude BETWEEN %s AND %s
-            AND   chl IS NOT NULL
-            ORDER BY date DESC
+            SELECT avg_chl as chl
+            FROM copernicus_monthly
+            WHERE month = %s
+            AND latitude  BETWEEN %s AND %s
+            AND longitude BETWEEN %s AND %s
+            AND avg_chl IS NOT NULL
             LIMIT 1
-        """, (lat - 0.3, lat + 0.3,
+        """, (current_month,
+              lat - 0.3, lat + 0.3,
               lon - 0.3, lon + 0.3))
 
-        cop_chl = cur.fetchone()
+        cop_chl      = cur.fetchone()
         cop_chl_dict = dict(cop_chl) if cop_chl else None
 
         # ── 4. Build satellite block ──
         satellite = {}
 
         if cop_sst_dict:
-            satellite["sst_value"]   = safe_round(cop_sst_dict.get("sst"), 2)
-            satellite["sst_anomaly"] = safe_round(cop_sst_dict.get("sst_anomaly"), 3)
-            satellite["ssh_value"]   = safe_round(cop_sst_dict.get("ssh"), 3)
-            satellite["ssh_anomaly"] = safe_round(cop_sst_dict.get("ssh_anomaly"), 3)
-            satellite["date"]        = str(cop_sst_dict["date"])
+            satellite["sst_value"] = safe_round(cop_sst_dict.get("sst"), 2)
+            satellite["ssh_value"] = safe_round(cop_sst_dict.get("ssh"), 3)
+            satellite["month"]     = current_month
 
         if cop_chl_dict:
-            satellite["chlorophyll_value"]   = safe_round(cop_chl_dict.get("chl"), 4)
-            satellite["chlorophyll_anomaly"] = safe_round(cop_chl_dict.get("chl_anomaly"), 4)
+            satellite["chlorophyll_value"] = safe_round(cop_chl_dict.get("chl"), 4)
 
         # ── 5. Compute indices ──
-        sst_anom = satellite.get("sst_anomaly")
-        ssh_anom = satellite.get("ssh_anomaly")
-        chl_anom = satellite.get("chlorophyll_anomaly")
-        chl_val  = satellite.get("chlorophyll_value")
+        ssh_val = satellite.get("ssh_value")
+        chl_val = satellite.get("chlorophyll_value")
 
         upwelling_index    = None
         productivity_index = None
 
-        if sst_anom is not None and ssh_anom is not None:
-            raw = (-sst_anom * 0.5) + (-ssh_anom * 10)
+        if ssh_val is not None:
+            raw = (-ssh_val * 10)
             upwelling_index = safe_round(max(0.0, min(1.0, (raw + 2) / 4)), 3)
 
-        if chl_anom is not None and upwelling_index is not None:
-            raw = (chl_anom * 0.4) + (upwelling_index * 0.6)
+        if chl_val is not None and upwelling_index is not None:
+            raw = (chl_val * 0.4) + (upwelling_index * 0.6)
             productivity_index = safe_round(max(0.0, min(1.0, (raw + 1) / 2)), 3)
         elif chl_val is not None:
             productivity_index = safe_round(min(1.0, chl_val / 1.0), 3)
@@ -226,9 +222,9 @@ def ocean_intelligence(
             "argo":      None,
             "metadata": {
                 "argo_source":    "INCOIS GDAC 2002-2026",
-                "sst_source":     "Copernicus OSTIA L4 (2024)",
-                "ssh_source":     "Copernicus DUACS (2024)",
-                "chl_source":     "Copernicus GlobColour (2024)",
+                "sst_source":     "Copernicus OSTIA L4 monthly climatology (2024)",
+                "ssh_source":     "Copernicus DUACS monthly climatology (2024)",
+                "chl_source":     "Copernicus GlobColour monthly climatology (2024)",
                 "computed_using": "gsw TEOS-10 v3.6",
                 "cite_as":        "Samudra Ocean Intelligence API v1.0 (2025). samudra.io"
             }
@@ -252,7 +248,6 @@ def ocean_intelligence(
                     "thermocline_depth":       safe_round(argo_dict["thermocline_depth"], 1),
                     "d20_depth":               safe_round(argo_dict["d20_depth"], 1),
                     "tchp_kj_cm2":             safe_round(argo_dict["tchp_kj_cm2"], 2),
-                 
                 },
                 "water_mass": {
                     "potential_density_surface": safe_round(argo_dict["potential_density_surface"], 4),
@@ -280,7 +275,6 @@ def ocean_timeseries(
     """
     Time series of ocean parameters for a location.
     Returns all historical Argo profiles near the coordinate.
-    Useful for researchers studying temporal variability.
 
     - **lat**: Latitude (-70 to 30)
     - **lon**: Longitude (20 to 120)
@@ -289,10 +283,7 @@ def ocean_timeseries(
     verify_key(api_key)
 
     if not (-70 <= lat <= 30 and 20 <= lon <= 120):
-        raise HTTPException(
-            status_code=400,
-            detail="Coordinates outside Indian Ocean bounds."
-        )
+        raise HTTPException(status_code=400, detail="Coordinates outside Indian Ocean bounds.")
 
     conn = get_conn()
     cur  = conn.cursor()
@@ -300,18 +291,10 @@ def ocean_timeseries(
     try:
         cur.execute("""
             SELECT
-                float_id,
-                measurement_date,
-                latitude,
-                longitude,
-                mixed_layer_depth,
-                thermocline_depth,
-                barrier_layer_thickness,
-                d20_depth,
-                tchp_kj_cm2,
-                stratification,
-                conservative_temp,
-                absolute_salinity,
+                float_id, measurement_date, latitude, longitude,
+                mixed_layer_depth, thermocline_depth,
+                barrier_layer_thickness, d20_depth,
+                tchp_kj_cm2, conservative_temp, absolute_salinity,
                 ROUND((
                     6371 * acos(LEAST(1.0,
                         cos(radians(%s)) * cos(radians(latitude)) *
@@ -328,14 +311,8 @@ def ocean_timeseries(
               lon - radius_deg, lon + radius_deg))
 
         rows = cur.fetchall()
-
         return {
-            "query": {
-                "lat":        lat,
-                "lon":        lon,
-                "radius_deg": radius_deg,
-                "region":     detect_region(lat, lon)
-            },
+            "query":      {"lat": lat, "lon": lon, "radius_deg": radius_deg, "region": detect_region(lat, lon)},
             "count":      len(rows),
             "timeseries": [dict(r) for r in rows],
             "cite_as":    "Samudra Ocean Intelligence API v1.0 (2025). samudra.io"
@@ -362,11 +339,7 @@ def get_float(float_id: str, api_key: str = "test-key-samudra-v1"):
         rows = cur.fetchall()
         if not rows:
             raise HTTPException(status_code=404, detail=f"Float {float_id} not found")
-        return {
-            "float_id":      float_id,
-            "profile_count": len(rows),
-            "profiles":      [dict(r) for r in rows]
-        }
+        return {"float_id": float_id, "profile_count": len(rows), "profiles": [dict(r) for r in rows]}
     finally:
         cur.close()
         conn.close()
@@ -375,8 +348,7 @@ def get_float(float_id: str, api_key: str = "test-key-samudra-v1"):
 @app.get("/ocean/region/{region}", tags=["Regional Summary"])
 def get_region(region: str, api_key: str = "test-key-samudra-v1"):
     """
-    Summary statistics for a region.
-
+    Summary statistics for a named region.
     Valid regions: arabian_sea, bay_of_bengal, indian_ocean, southern_ocean, equatorial
     """
     verify_key(api_key)
@@ -390,10 +362,7 @@ def get_region(region: str, api_key: str = "test-key-samudra-v1"):
     }
 
     if region not in regions:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid region. Valid: {list(regions.keys())}"
-        )
+        raise HTTPException(status_code=400, detail=f"Invalid region. Valid: {list(regions.keys())}")
 
     r    = regions[region]
     conn = get_conn()
@@ -415,7 +384,6 @@ def get_region(region: str, api_key: str = "test-key-samudra-v1"):
             WHERE latitude  BETWEEN %s AND %s
             AND   longitude BETWEEN %s AND %s
         """, (r['lat1'], r['lat2'], r['lon1'], r['lon2']))
-
         summary = cur.fetchone()
 
         cur.execute("""
@@ -423,10 +391,8 @@ def get_region(region: str, api_key: str = "test-key-samudra-v1"):
             FROM computed_profiles
             WHERE latitude  BETWEEN %s AND %s
             AND   longitude BETWEEN %s AND %s
-            GROUP BY stratification
-            ORDER BY count DESC
+            GROUP BY stratification ORDER BY count DESC
         """, (r['lat1'], r['lat2'], r['lon1'], r['lon2']))
-
         strat_rows = cur.fetchall()
 
         return {
@@ -450,7 +416,6 @@ def search_floats(
 ):
     """Find all computed Argo profiles near a coordinate."""
     verify_key(api_key)
-
     conn = get_conn()
     cur  = conn.cursor()
 
@@ -459,7 +424,7 @@ def search_floats(
             SELECT float_id, latitude, longitude,
                    measurement_date, mixed_layer_depth,
                    thermocline_depth, tchp_kj_cm2,
-                   stratification, conservative_temp,
+                   conservative_temp,
                    ROUND((
                        6371 * acos(LEAST(1.0,
                            cos(radians(%s)) * cos(radians(latitude)) *
@@ -478,11 +443,7 @@ def search_floats(
               limit))
 
         rows = cur.fetchall()
-        return {
-            "query":  {"lat": lat, "lon": lon, "radius_deg": radius_deg},
-            "count":  len(rows),
-            "floats": [dict(r) for r in rows]
-        }
+        return {"query": {"lat": lat, "lon": lon, "radius_deg": radius_deg}, "count": len(rows), "floats": [dict(r) for r in rows]}
 
     finally:
         cur.close()
@@ -496,7 +457,7 @@ def health():
     cur  = conn.cursor()
     status = {"status": "ok", "tables": {}}
     try:
-        for table in ["computed_profiles", "profiles", "floats", "copernicus_daily"]:
+        for table in ["computed_profiles", "profiles", "floats", "copernicus_monthly"]:
             try:
                 cur.execute(f"SELECT COUNT(*) as c FROM {table}")
                 status["tables"][table] = cur.fetchone()["c"]
