@@ -5,3 +5,5 @@ python-dotenv
 numpy
 gsw
 copernicusmarine
+redis
+redis

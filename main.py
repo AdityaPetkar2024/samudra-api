@@ -1,10 +1,13 @@
 from datetime import date
 import datetime
 import os
+import json
 import numpy as np
+import redis
 from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from concurrent.futures import ThreadPoolExecutor
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -43,6 +46,16 @@ else:
 COPERNICUS_USER = os.getenv("COPERNICUS_USERNAME")
 COPERNICUS_PASS = os.getenv("COPERNICUS_PASSWORD")
 
+# Redis cache
+REDIS_URL = os.getenv("REDIS_URL")
+redis_client = None
+if REDIS_URL:
+    try:
+        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+        redis_client.ping()
+    except Exception:
+        redis_client = None
+
 API_KEYS = {"test-key-samudra-v1": "free"}
 
 def get_conn():
@@ -79,82 +92,105 @@ def safe_round(val, digits):
 def get_live_copernicus(lat: float, lon: float) -> dict:
     if not COPERNICUS_USER or not COPERNICUS_PASS:
         return {}
+
+    lat_r = round(lat, 1)
+    lon_r = round(lon, 1)
+    today = datetime.date.today().isoformat()
+    cache_key = f"cop:{lat_r}:{lon_r}:{today}"
+
+    # Check Redis cache first
+    if redis_client:
+        try:
+            cached = redis_client.get(cache_key)
+            if cached:
+                return json.loads(cached)
+        except Exception:
+            pass
+
+    # Cache miss — call Copernicus in parallel
     try:
         import copernicusmarine
         result = {}
 
-        # SST
-        try:
-            ds = copernicusmarine.open_dataset(
-                dataset_id="cmems_mod_glo_phy-thetao_anfc_0.083deg_P1D-m",
-                username=COPERNICUS_USER,
-                password=COPERNICUS_PASS,
-                minimum_latitude=lat - 0.1,
-                maximum_latitude=lat + 0.1,
-                minimum_longitude=lon - 0.1,
-                maximum_longitude=lon + 0.1,
-                minimum_depth=0,
-                maximum_depth=1,
-            )
-            sst = float(ds["thetao"].isel(time=-1, depth=0).mean().values)
-            result["sst_value"] = safe_round(sst, 2)
-            result["sst_date"]  = str(ds.time.values[-1])[:10]
-        except Exception:
-            pass
+        def fetch_sst():
+            try:
+                ds = copernicusmarine.open_dataset(
+                    dataset_id="cmems_mod_glo_phy-thetao_anfc_0.083deg_P1D-m",
+                    username=COPERNICUS_USER, password=COPERNICUS_PASS,
+                    minimum_latitude=lat-0.1, maximum_latitude=lat+0.1,
+                    minimum_longitude=lon-0.1, maximum_longitude=lon+0.1,
+                    minimum_depth=0, maximum_depth=1,
+                )
+                return {
+                    "sst_value": safe_round(float(ds["thetao"].isel(time=-1, depth=0).mean().values), 2),
+                    "sst_date":  str(ds.time.values[-1])[:10]
+                }
+            except Exception:
+                return {}
 
-        # SSH
-        try:
-            ds = copernicusmarine.open_dataset(
-                dataset_id="cmems_mod_glo_phy_anfc_0.083deg_P1D-m",
-                username=COPERNICUS_USER,
-                password=COPERNICUS_PASS,
-                minimum_latitude=lat - 0.1,
-                maximum_latitude=lat + 0.1,
-                minimum_longitude=lon - 0.1,
-                maximum_longitude=lon + 0.1,
-            )
-            ssh = float(ds["zos"].isel(time=-1).mean().values)
-            result["ssh_value"] = safe_round(ssh, 3)
-        except Exception:
-            pass
+        def fetch_ssh():
+            try:
+                ds = copernicusmarine.open_dataset(
+                    dataset_id="cmems_mod_glo_phy_anfc_0.083deg_P1D-m",
+                    username=COPERNICUS_USER, password=COPERNICUS_PASS,
+                    minimum_latitude=lat-0.1, maximum_latitude=lat+0.1,
+                    minimum_longitude=lon-0.1, maximum_longitude=lon+0.1,
+                )
+                return {"ssh_value": safe_round(float(ds["zos"].isel(time=-1).mean().values), 3)}
+            except Exception:
+                return {}
 
-        # SST anomaly
-        try:
-            ds = copernicusmarine.open_dataset(
-                dataset_id="cmems_mod_glo_phy_anfc_0.083deg-sst-anomaly_P1D-m",
-                username=COPERNICUS_USER,
-                password=COPERNICUS_PASS,
-                minimum_latitude=lat - 0.1,
-                maximum_latitude=lat + 0.1,
-                minimum_longitude=lon - 0.1,
-                maximum_longitude=lon + 0.1,
-            )
-            anom = float(ds["sea_surface_temperature_anomaly"].isel(time=-1).mean().values)
-            result["sst_anomaly"] = safe_round(anom, 3)
-        except Exception:
-            pass
+        def fetch_sst_anom():
+            try:
+                ds = copernicusmarine.open_dataset(
+                    dataset_id="cmems_mod_glo_phy_anfc_0.083deg-sst-anomaly_P1D-m",
+                    username=COPERNICUS_USER, password=COPERNICUS_PASS,
+                    minimum_latitude=lat-0.1, maximum_latitude=lat+0.1,
+                    minimum_longitude=lon-0.1, maximum_longitude=lon+0.1,
+                )
+                return {"sst_anomaly": safe_round(float(ds["sea_surface_temperature_anomaly"].isel(time=-1).mean().values), 3)}
+            except Exception:
+                return {}
 
-        # CHL
-        try:
-            ds = copernicusmarine.open_dataset(
-                dataset_id="cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D",
-                username=COPERNICUS_USER,
-                password=COPERNICUS_PASS,
-                minimum_latitude=lat - 0.3,
-                maximum_latitude=lat + 0.3,
-                minimum_longitude=lon - 0.3,
-                maximum_longitude=lon + 0.3,
-            )
-            for i in range(-1, -8, -1):
-                chl = float(ds["CHL"].isel(time=i).mean().values)
-                if not np.isnan(chl):
-                    result["chlorophyll_value"] = safe_round(chl, 4)
-                    result["chl_date"] = str(ds.time.values[i])[:10]
-                    break
-        except Exception:
-            pass
+        def fetch_chl():
+            try:
+                ds = copernicusmarine.open_dataset(
+                    dataset_id="cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D",
+                    username=COPERNICUS_USER, password=COPERNICUS_PASS,
+                    minimum_latitude=lat-0.3, maximum_latitude=lat+0.3,
+                    minimum_longitude=lon-0.3, maximum_longitude=lon+0.3,
+                )
+                for i in range(-1, -8, -1):
+                    chl = float(ds["CHL"].isel(time=i).mean().values)
+                    if not np.isnan(chl):
+                        return {
+                            "chlorophyll_value": safe_round(chl, 4),
+                            "chl_date": str(ds.time.values[i])[:10]
+                        }
+                return {}
+            except Exception:
+                return {}
+
+        # Run all 4 in parallel
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [
+                executor.submit(fetch_sst),
+                executor.submit(fetch_ssh),
+                executor.submit(fetch_sst_anom),
+                executor.submit(fetch_chl),
+            ]
+            for f in futures:
+                result.update(f.result())
+
+        # Cache in Redis for 24 hours
+        if redis_client and result:
+            try:
+                redis_client.setex(cache_key, 86400, json.dumps(result))
+            except Exception:
+                pass
 
         return result
+
     except Exception:
         return {}
 
@@ -235,7 +271,7 @@ def ocean_intelligence(
         if argo_dict and float(argo_dict["distance_km"]) > 300:
             argo_dict = None
 
-        # ── 2. Live Copernicus ──
+        # ── 2. Live Copernicus (Redis cached) ──
         live = get_live_copernicus(lat, lon)
 
         # ── 3. Monthly climatology fallback ──
@@ -246,7 +282,7 @@ def ocean_intelligence(
             AND latitude  BETWEEN %s AND %s
             AND longitude BETWEEN %s AND %s
             LIMIT 1
-        """, (current_month, lat - 0.1, lat + 0.1, lon - 0.1, lon + 0.1))
+        """, (current_month, lat-0.1, lat+0.1, lon-0.1, lon+0.1))
         clim = dict(cur.fetchone() or {})
 
         cur.execute("""
@@ -257,22 +293,20 @@ def ocean_intelligence(
             AND longitude BETWEEN %s AND %s
             AND avg_chl IS NOT NULL
             LIMIT 1
-        """, (current_month, lat - 0.3, lat + 0.3, lon - 0.3, lon + 0.3))
+        """, (current_month, lat-0.3, lat+0.3, lon-0.3, lon+0.3))
         clim_chl = dict(cur.fetchone() or {})
 
         # ── 4. Build satellite block ──
         satellite = {}
-        satellite["sst_value"]        = live.get("sst_value")        or safe_round(clim.get("sst"), 2)
-        satellite["sst_anomaly"]       = live.get("sst_anomaly")
-        satellite["ssh_value"]         = live.get("ssh_value")        or safe_round(clim.get("ssh"), 3)
-        satellite["chlorophyll_value"] = live.get("chlorophyll_value") or safe_round(clim_chl.get("chl"), 4)
-        satellite["data_date"]         = live.get("sst_date", f"climatology-month-{current_month}")
+        satellite["sst_value"]        = live.get("sst_value")         or safe_round(clim.get("sst"), 2)
+        satellite["sst_anomaly"]      = live.get("sst_anomaly")
+        satellite["ssh_value"]        = live.get("ssh_value")         or safe_round(clim.get("ssh"), 3)
+        satellite["chlorophyll_value"]= live.get("chlorophyll_value") or safe_round(clim_chl.get("chl"), 4)
+        satellite["data_date"]        = live.get("sst_date", f"climatology-month-{current_month}")
 
-        # SSH anomaly from climatology
         if live.get("ssh_value") and clim.get("ssh"):
             satellite["ssh_anomaly"] = safe_round(live["ssh_value"] - float(clim["ssh"]), 3)
 
-        # CHL anomaly from climatology
         if live.get("chlorophyll_value") and clim_chl.get("chl"):
             satellite["chlorophyll_anomaly"] = safe_round(live["chlorophyll_value"] - float(clim_chl["chl"]), 4)
 
@@ -375,9 +409,12 @@ def ocean_timeseries(lat: float, lon: float, radius_deg: float = 3.0, api_key: s
             ORDER BY measurement_date ASC
         """, (lat, lon, lat, lat-radius_deg, lat+radius_deg, lon-radius_deg, lon+radius_deg))
         rows = cur.fetchall()
-        return {"query": {"lat": lat, "lon": lon, "radius_deg": radius_deg, "region": detect_region(lat, lon)},
-                "count": len(rows), "timeseries": [dict(r) for r in rows],
-                "cite_as": "Samudra Ocean Intelligence API v1.0 (2025). samudra.io"}
+        return {
+            "query":      {"lat": lat, "lon": lon, "radius_deg": radius_deg, "region": detect_region(lat, lon)},
+            "count":      len(rows),
+            "timeseries": [dict(r) for r in rows],
+            "cite_as":    "Samudra Ocean Intelligence API v1.0 (2025). samudra.io"
+        }
     finally:
         cur.close()
         conn.close()
@@ -437,8 +474,11 @@ def get_region(region: str, api_key: str = "test-key-samudra-v1"):
             GROUP BY stratification ORDER BY count DESC
         """, (r['lat1'], r['lat2'], r['lon1'], r['lon2']))
         strat_rows = cur.fetchall()
-        return {"region": region, "summary": dict(summary) if summary else {},
-                "stratification_breakdown": [dict(s) for s in strat_rows]}
+        return {
+            "region":                   region,
+            "summary":                  dict(summary) if summary else {},
+            "stratification_breakdown": [dict(s) for s in strat_rows]
+        }
     finally:
         cur.close()
         conn.close()
@@ -464,8 +504,11 @@ def search_floats(lat: float, lon: float, radius_deg: float = 3.0, limit: int = 
             ORDER BY distance_km LIMIT %s
         """, (lat, lon, lat, lat-radius_deg, lat+radius_deg, lon-radius_deg, lon+radius_deg, limit))
         rows = cur.fetchall()
-        return {"query": {"lat": lat, "lon": lon, "radius_deg": radius_deg},
-                "count": len(rows), "floats": [dict(r) for r in rows]}
+        return {
+            "query":  {"lat": lat, "lon": lon, "radius_deg": radius_deg},
+            "count":  len(rows),
+            "floats": [dict(r) for r in rows]
+        }
     finally:
         cur.close()
         conn.close()
@@ -484,8 +527,9 @@ def health():
                 status["tables"][table] = cur.fetchone()["c"]
             except Exception as e:
                 status["tables"][table] = f"unavailable: {str(e).split(chr(10))[0]}"
+        status["redis"]           = "connected" if redis_client else "disabled"
         status["copernicus_live"] = "enabled" if COPERNICUS_USER else "disabled"
-        status["coverage"] = "Indian Ocean 2002-2026"
+        status["coverage"]        = "Indian Ocean 2002-2026"
         return status
     finally:
         cur.close()
