@@ -33,6 +33,22 @@ client    = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 geolocator = Nominatim(user_agent="samudra_v1")
 
 SCHEMA = """
+- ALWAYS cast to numeric before ROUND: ROUND(column::numeric, 2) NEVER ROUND(column, 2)
+- Always LIMIT to 20 rows maximum
+- For multi-region comparisons use CASE WHEN
+- Valid ranges — always filter these in WHERE clause:
+  surface_temp BETWEEN -2 AND 35
+  surface_salinity BETWEEN 20 AND 45
+  mixed_layer_depth BETWEEN 1 AND 450
+  isothermal_layer_depth BETWEEN 1 AND 450
+  barrier_layer_thickness BETWEEN 0 AND 200
+  thermocline_depth BETWEEN 1 AND 900
+  d20_depth BETWEEN 1 AND 800
+  tchp_kj_cm2 BETWEEN 0 AND 250
+  conservative_temp BETWEEN -2 AND 35
+  absolute_salinity BETWEEN 20 AND 45
+  max_depth BETWEEN 1 AND 6000
+
 PostgreSQL database schema:
 
 TABLE floats
