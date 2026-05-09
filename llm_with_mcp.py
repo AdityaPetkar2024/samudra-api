@@ -1,7 +1,6 @@
 """
 Samudra LLM Chat — Dynamic SQL approach.
-Instead of 21 hardcoded tools, the LLM writes SQL directly.
-Uses OpenAI GPT-4o-mini. Falls back gracefully on errors.
+Uses OpenAI GPT-4o-mini + auto SQL fixer.
 """
 
 import json
@@ -29,26 +28,10 @@ else:
         "user": "argo_user1", "password": "argo123"
     }
 
-client    = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client     = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 geolocator = Nominatim(user_agent="samudra_v1")
 
 SCHEMA = """
-- ALWAYS cast to numeric before ROUND: ROUND(column::numeric, 2) NEVER ROUND(column, 2)
-- Always LIMIT to 20 rows maximum
-- For multi-region comparisons use CASE WHEN
-- Valid ranges — always filter these in WHERE clause:
-  surface_temp BETWEEN -2 AND 35
-  surface_salinity BETWEEN 20 AND 45
-  mixed_layer_depth BETWEEN 1 AND 450
-  isothermal_layer_depth BETWEEN 1 AND 450
-  barrier_layer_thickness BETWEEN 0 AND 200
-  thermocline_depth BETWEEN 1 AND 900
-  d20_depth BETWEEN 1 AND 800
-  tchp_kj_cm2 BETWEEN 0 AND 250
-  conservative_temp BETWEEN -2 AND 35
-  absolute_salinity BETWEEN 20 AND 45
-  max_depth BETWEEN 1 AND 6000
-
 PostgreSQL database schema:
 
 TABLE floats
@@ -89,23 +72,41 @@ Region bounding boxes:
   Indian Ocean:   lat -70-30, lon 20-120
 
 CRITICAL SQL RULES:
-- ALWAYS cast to numeric before ROUND: ROUND(column::numeric, 2) NEVER ROUND(column, 2)
-- Filter bad data: WHERE mixed_layer_depth < 500 AND thermocline_depth < 1000
-- Always LIMIT to 20 rows maximum
+- Cast AFTER aggregation: ROUND(AVG(col)::numeric, 2) NOT ROUND(AVG(col::numeric, 2))
+- Cast bare columns:      ROUND(col::numeric, 2)
+- Always LIMIT 20 rows maximum
 - For multi-region comparisons use CASE WHEN
+- Always apply valid range filters in WHERE:
+    surface_temp BETWEEN -2 AND 35
+    surface_salinity BETWEEN 20 AND 45
+    mixed_layer_depth BETWEEN 1 AND 450
+    isothermal_layer_depth BETWEEN 1 AND 450
+    barrier_layer_thickness BETWEEN 0 AND 200
+    thermocline_depth BETWEEN 1 AND 900
+    d20_depth BETWEEN 1 AND 800
+    tchp_kj_cm2 BETWEEN 0 AND 250
+    conservative_temp BETWEEN -2 AND 35
+    absolute_salinity BETWEEN 20 AND 45
+    max_depth BETWEEN 1 AND 6000
 
 Example queries:
 Q: Compare Arabian Sea vs Bay of Bengal salinity
-SQL: SELECT CASE WHEN latitude BETWEEN 5 AND 25 AND longitude BETWEEN 50 AND 78 THEN 'Arabian Sea' ELSE 'Bay of Bengal' END as region, ROUND(AVG(absolute_salinity)::numeric, 3) as avg_salinity, COUNT(*) as profiles FROM computed_profiles WHERE (latitude BETWEEN 5 AND 25 AND longitude BETWEEN 50 AND 78) OR (latitude BETWEEN 5 AND 22 AND longitude BETWEEN 78 AND 100) GROUP BY region;
+SQL: SELECT CASE WHEN latitude BETWEEN 5 AND 25 AND longitude BETWEEN 50 AND 78 THEN 'Arabian Sea' ELSE 'Bay of Bengal' END as region, ROUND(AVG(absolute_salinity)::numeric, 3) as avg_salinity, COUNT(*) as profiles FROM computed_profiles WHERE ((latitude BETWEEN 5 AND 25 AND longitude BETWEEN 50 AND 78) OR (latitude BETWEEN 5 AND 22 AND longitude BETWEEN 78 AND 100)) AND absolute_salinity BETWEEN 20 AND 45 GROUP BY region;
 
 Q: Warmest surface temp recorded
-SQL: SELECT float_id, ROUND(surface_temp::numeric, 2) as surface_temp, measurement_date FROM profiles WHERE surface_temp IS NOT NULL ORDER BY surface_temp DESC LIMIT 1;
+SQL: SELECT float_id, ROUND(surface_temp::numeric, 2) as surface_temp, measurement_date FROM profiles WHERE surface_temp BETWEEN -2 AND 35 ORDER BY surface_temp DESC LIMIT 1;
+
+Q: Saltiest water recorded
+SQL: SELECT float_id, ROUND(surface_salinity::numeric, 3) as salinity, measurement_date FROM profiles WHERE surface_salinity BETWEEN 20 AND 45 ORDER BY surface_salinity DESC LIMIT 1;
 
 Q: Floats near Chennai
 SQL: SELECT float_id, ROUND(latitude::numeric, 3) as lat, ROUND(longitude::numeric, 3) as lon, ROUND((6371 * acos(LEAST(1.0, cos(radians(13.08)) * cos(radians(latitude)) * cos(radians(longitude) - radians(80.27)) + sin(radians(13.08)) * sin(radians(latitude)))))::numeric, 1) as distance_km FROM computed_profiles WHERE latitude BETWEEN 8 AND 18 AND longitude BETWEEN 75 AND 90 ORDER BY distance_km LIMIT 10;
 
 Q: Average MLD in Arabian Sea
-SQL: SELECT ROUND(AVG(mixed_layer_depth)::numeric, 1) as avg_mld_m FROM computed_profiles WHERE latitude BETWEEN 5 AND 25 AND longitude BETWEEN 50 AND 78 AND mixed_layer_depth < 500;
+SQL: SELECT ROUND(AVG(mixed_layer_depth)::numeric, 1) as avg_mld_m FROM computed_profiles WHERE latitude BETWEEN 5 AND 25 AND longitude BETWEEN 50 AND 78 AND mixed_layer_depth BETWEEN 1 AND 450;
+
+Q: MLD trend in Arabian Sea from 2010 to 2020
+SQL: SELECT EXTRACT(YEAR FROM measurement_date) as year, ROUND(AVG(mixed_layer_depth)::numeric, 1) as avg_mld FROM computed_profiles WHERE latitude BETWEEN 5 AND 25 AND longitude BETWEEN 50 AND 78 AND mixed_layer_depth BETWEEN 1 AND 450 AND measurement_date BETWEEN '2010-01-01' AND '2020-12-31' GROUP BY year ORDER BY year;
 """
 
 SYSTEM_PROMPT = f"""You are an expert oceanographic data assistant for the Samudra Indian Ocean API.
@@ -136,11 +137,34 @@ def geocode_place(place_name: str):
     return None, None, None
 
 
+def fix_sql(query: str) -> str:
+    """Auto-fix common LLM SQL mistakes."""
+
+    # Fix: ROUND(AVG(col::numeric, N)) → ROUND(AVG(col)::numeric, N)
+    query = re.sub(
+        r'ROUND\((AVG|SUM|MIN|MAX|COUNT)\((\w+)::numeric,\s*(\d+)\)\)',
+        r'ROUND(\1(\2)::numeric, \3)',
+        query
+    )
+
+    # Fix: ROUND(col, N) → ROUND(col::numeric, N) for bare column names
+    query = re.sub(
+        r'ROUND\(([a-zA-Z_][a-zA-Z0-9_]*),\s*(\d+)\)',
+        r'ROUND(\1::numeric, \2)',
+        query
+    )
+
+    return query
+
+
 def execute_sql(query: str) -> list:
     q = query.strip().upper()
     for banned in ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "CREATE", "TRUNCATE"]:
         if banned in q:
             return [{"error": f"Forbidden keyword: {banned}"}]
+
+    query = fix_sql(query)
+
     conn = get_conn()
     cur  = conn.cursor()
     try:
@@ -166,7 +190,7 @@ def llm_call(messages: list) -> str:
 
 def chat_with_tools(user_message: str, history: list = []) -> str:
     # Step 1 — geocode place names
-    geo_context  = ""
+    geo_context   = ""
     place_extract = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content":
@@ -206,7 +230,7 @@ def chat_with_tools(user_message: str, history: list = []) -> str:
     if not sql:
         return f"I couldn't generate a query for that. {explanation}"
 
-    # Step 4 — execute
+    # Step 4 — execute (with auto-fix)
     results = execute_sql(sql)
 
     if results and "error" in results[0]:
