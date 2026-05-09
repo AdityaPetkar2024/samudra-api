@@ -14,7 +14,7 @@ from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
 from openai import OpenAI
 
-# ── DB config ────────────────────────────────────────────────────────────────
+# ── DB config ─────────────────────────────────────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if DATABASE_URL:
@@ -29,12 +29,9 @@ else:
         "user": "argo_user1", "password": "argo123"
     }
 
-# ── OpenAI client ─────────────────────────────────────────────────────────────
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
+client    = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 geolocator = Nominatim(user_agent="samudra_v1")
 
-# ── Schema context for the LLM ───────────────────────────────────────────────
 SCHEMA = """
 PostgreSQL database schema:
 
@@ -53,22 +50,20 @@ TABLE computed_profiles
   float_id VARCHAR, profile_idx INT,
   latitude FLOAT, longitude FLOAT,
   measurement_date TIMESTAMP,
-  mixed_layer_depth FLOAT,          -- metres
-  isothermal_layer_depth FLOAT,     -- metres
-  barrier_layer_thickness FLOAT,    -- metres
-  thermocline_depth FLOAT,          -- metres
-  d20_depth FLOAT,                  -- depth of 20°C isotherm, metres
-  tchp_kj_cm2 FLOAT,                -- tropical cyclone heat potential
-  conservative_temp FLOAT,          -- degrees C (GSW TEOS-10)
-  absolute_salinity FLOAT,          -- g/kg (GSW TEOS-10)
-  potential_density_surface FLOAT,  -- kg/m³
+  mixed_layer_depth FLOAT,
+  isothermal_layer_depth FLOAT,
+  barrier_layer_thickness FLOAT,
+  thermocline_depth FLOAT,
+  d20_depth FLOAT,
+  tchp_kj_cm2 FLOAT,
+  conservative_temp FLOAT,
+  absolute_salinity FLOAT,
+  potential_density_surface FLOAT
 
 TABLE copernicus_monthly
   month INT (1-12),
   latitude FLOAT, longitude FLOAT,
-  avg_sst FLOAT,   -- sea surface temperature °C
-  avg_ssh FLOAT,   -- sea surface height metres
-  avg_chl FLOAT    -- chlorophyll mg/m³
+  avg_sst FLOAT, avg_ssh FLOAT, avg_chl FLOAT
 
 Region bounding boxes:
   Arabian Sea:    lat 5-25,  lon 50-78
@@ -76,6 +71,25 @@ Region bounding boxes:
   Equatorial IO:  lat -10-10, lon 40-110
   Southern Ocean: lat -70--30, lon 0-150
   Indian Ocean:   lat -70-30, lon 20-120
+
+CRITICAL SQL RULES:
+- ALWAYS cast to numeric before ROUND: ROUND(column::numeric, 2) NEVER ROUND(column, 2)
+- Filter bad data: WHERE mixed_layer_depth < 500 AND thermocline_depth < 1000
+- Always LIMIT to 20 rows maximum
+- For multi-region comparisons use CASE WHEN
+
+Example queries:
+Q: Compare Arabian Sea vs Bay of Bengal salinity
+SQL: SELECT CASE WHEN latitude BETWEEN 5 AND 25 AND longitude BETWEEN 50 AND 78 THEN 'Arabian Sea' ELSE 'Bay of Bengal' END as region, ROUND(AVG(absolute_salinity)::numeric, 3) as avg_salinity, COUNT(*) as profiles FROM computed_profiles WHERE (latitude BETWEEN 5 AND 25 AND longitude BETWEEN 50 AND 78) OR (latitude BETWEEN 5 AND 22 AND longitude BETWEEN 78 AND 100) GROUP BY region;
+
+Q: Warmest surface temp recorded
+SQL: SELECT float_id, ROUND(surface_temp::numeric, 2) as surface_temp, measurement_date FROM profiles WHERE surface_temp IS NOT NULL ORDER BY surface_temp DESC LIMIT 1;
+
+Q: Floats near Chennai
+SQL: SELECT float_id, ROUND(latitude::numeric, 3) as lat, ROUND(longitude::numeric, 3) as lon, ROUND((6371 * acos(LEAST(1.0, cos(radians(13.08)) * cos(radians(latitude)) * cos(radians(longitude) - radians(80.27)) + sin(radians(13.08)) * sin(radians(latitude)))))::numeric, 1) as distance_km FROM computed_profiles WHERE latitude BETWEEN 8 AND 18 AND longitude BETWEEN 75 AND 90 ORDER BY distance_km LIMIT 10;
+
+Q: Average MLD in Arabian Sea
+SQL: SELECT ROUND(AVG(mixed_layer_depth)::numeric, 1) as avg_mld_m FROM computed_profiles WHERE latitude BETWEEN 5 AND 25 AND longitude BETWEEN 50 AND 78 AND mixed_layer_depth < 500;
 """
 
 SYSTEM_PROMPT = f"""You are an expert oceanographic data assistant for the Samudra Indian Ocean API.
@@ -84,19 +98,10 @@ You have access to a PostgreSQL database. When the user asks a question, generat
 
 {SCHEMA}
 
-Rules:
-- Only generate SELECT queries. Never UPDATE, DELETE, DROP, INSERT.
-- Always LIMIT results to 20 rows maximum.
-- Round floats to 2-3 decimal places using ROUND().
-- For distance queries use: 6371 * acos(LEAST(1.0, cos(radians(lat1)) * cos(radians(lat2)) * cos(radians(lon2) - radians(lon1)) + sin(radians(lat1)) * sin(radians(lat2)))) AS distance_km
-- Use computed_profiles for oceanographic parameters (MLD, thermocline, TCHP etc.)
-- Use profiles for surface temp, salinity, basic float info
-- Use copernicus_monthly for satellite SST/SSH/CHL data
-
 Respond in JSON format:
 {{"sql": "SELECT ...", "explanation": "one line explaining what this query does"}}
 
-If the question cannot be answered with SQL (e.g. general knowledge), respond:
+If the question cannot be answered with SQL, respond:
 {{"sql": null, "explanation": "reason why", "answer": "direct answer here"}}
 """
 
@@ -116,13 +121,12 @@ def geocode_place(place_name: str):
 
 
 def execute_sql(query: str) -> list:
-    """Execute a SELECT query safely, return list of dicts."""
     q = query.strip().upper()
     for banned in ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "CREATE", "TRUNCATE"]:
         if banned in q:
-            return [{"error": f"Query contains forbidden keyword: {banned}"}]
+            return [{"error": f"Forbidden keyword: {banned}"}]
     conn = get_conn()
-    cur = conn.cursor()
+    cur  = conn.cursor()
     try:
         cur.execute(query)
         return [dict(r) for r in cur.fetchall()]
@@ -145,76 +149,70 @@ def llm_call(messages: list) -> str:
 
 
 def chat_with_tools(user_message: str, history: list = []) -> str:
-    # Step 1 — extract and geocode any place name
-    geo_context = ""
+    # Step 1 — geocode place names
+    geo_context  = ""
     place_extract = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content":
             f"Extract any place name from this text. Reply ONLY 'PLACE: <name>' or 'NO_PLACE'.\nText: {user_message}"}],
-        max_tokens=30,
-        temperature=0,
+        max_tokens=30, temperature=0,
     ).choices[0].message.content.strip()
 
     if place_extract.startswith("PLACE:"):
         place = place_extract.replace("PLACE:", "").strip()
-        lat, lon, addr = geocode_place(place)
+        lat, lon, _ = geocode_place(place)
         if lat:
-            geo_context = f"\n[GEOCODED: '{place}' → lat={lat:.4f}, lon={lon:.4f}]"
+            geo_context = f"\n[GEOCODED: '{place}' -> lat={lat:.4f}, lon={lon:.4f}]"
         else:
             geo_context = f"\n[GEOCODE FAILED for '{place}']"
 
-    # Step 2 — ask LLM to generate SQL
+    # Step 2 — generate SQL
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    
-    # Include last 3 exchanges for context
     for msg in history[-6:]:
         messages.append(msg)
-    
     messages.append({"role": "user", "content": f"{user_message}{geo_context}"})
 
     plan_raw = llm_call(messages)
 
-    # Step 3 — parse and execute
+    # Step 3 — parse
     try:
         plan = json.loads(plan_raw)
     except Exception:
         match = re.search(r'\{.*\}', plan_raw, re.DOTALL)
-        plan = json.loads(match.group()) if match else {}
+        plan  = json.loads(match.group()) if match else {}
 
-    sql = plan.get("sql")
-    explanation = plan.get("explanation", "")
+    sql           = plan.get("sql")
+    explanation   = plan.get("explanation", "")
     direct_answer = plan.get("answer")
 
     if direct_answer:
         return direct_answer
-
     if not sql:
         return f"I couldn't generate a query for that. {explanation}"
 
-    # Step 4 — execute SQL
+    # Step 4 — execute
     results = execute_sql(sql)
 
     if results and "error" in results[0]:
         return f"Database error: {results[0]['error']}\n\nQuery attempted:\n```sql\n{sql}\n```"
-
     if not results:
         return f"No data found. {explanation}"
 
-    # Step 5 — synthesise natural language answer
-    synthesis_messages = [
+    # Step 5 — synthesise
+    synthesis = [
         {"role": "system", "content":
             "You are an expert oceanographic assistant. Answer clearly using only the data provided. "
             "Include specific numbers. Never invent values. Be concise."},
         {"role": "user", "content":
             f"Question: {user_message}{geo_context}\n\n"
-            f"Query explanation: {explanation}\n\n"
+            f"Query: {explanation}\n\n"
             f"Results ({len(results)} rows):\n{json.dumps(results[:20], indent=2, default=str)}\n\n"
-            f"Give a clear, concise answer using these results."}
+            f"Give a clear, concise answer."}
     ]
 
     return client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=synthesis_messages,
+        messages=synthesis,
         temperature=0.2,
         max_tokens=600,
     ).choices[0].message.content
