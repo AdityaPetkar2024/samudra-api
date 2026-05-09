@@ -129,67 +129,154 @@ tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Float Map", "🔍 Float Explorer", "�
 
 # ── Tab 1: Float Map ──────────────────────────────────────────────────────────
 with tab1:
-   fig = go.Figure()
-fig.add_trace(go.Scattergeo(
-    lat=positions['latitude'],
-    lon=positions['longitude'],
-    mode='markers',
-    marker=dict(
-        size=7,
-        color=positions['surface_temp'],
-        colorscale='Plasma',
-        showscale=True,
-        colorbar=dict(title="SST (°C)", thickness=12, len=0.6),
-        opacity=0.85,
-    ),
-    text=[f"Float {r['float_id']}<br>SST: {r['surface_temp']}°C"
-          for _, r in positions.iterrows()],
-    hoverinfo='text',
-))
-fig.update_geos(
-    center=dict(lat=5, lon=75), projection_scale=3,
-    projection_type='natural earth',
-    showland=True, landcolor='#1a1a2e',
-    showocean=True, oceancolor='#0d2137',
-    showcoastlines=True, coastlinecolor='#4a9eff',
-    showcountries=False,
-    showframe=False
-)
-fig.update_layout(height=580, margin=dict(l=0, r=0, t=0, b=0), paper_bgcolor='rgba(0,0,0,0)')
+    st.subheader("All INCOIS Argo Floats — Indian Ocean")
+    positions = get_float_positions()
+
+    if positions.empty:
+        st.warning("No float data available.")
+    else:
+        fig = go.Figure()
+        fig.add_trace(go.Scattergeo(
+            lat=positions['latitude'],
+            lon=positions['longitude'],
+            mode='markers',
+            marker=dict(
+                size=7,
+                color=positions['surface_temp'],
+                colorscale='Plasma',
+                showscale=True,
+                colorbar=dict(title="SST (°C)", thickness=12, len=0.6),
+                opacity=0.85,
+            ),
+            text=[f"Float {r['float_id']}<br>SST: {r['surface_temp']}°C"
+                  for _, r in positions.iterrows()],
+            hoverinfo='text',
+        ))
+        fig.update_geos(
+            center=dict(lat=5, lon=75), projection_scale=3,
+            projection_type='natural earth',
+            showland=True, landcolor='#1a1a2e',
+            showocean=True, oceancolor='#0d2137',
+            showcoastlines=True, coastlinecolor='#4a9eff',
+            showcountries=False,
+            showframe=False
+        )
+        fig.update_layout(height=580, margin=dict(l=0, r=0, t=0, b=0), paper_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(f"{len(positions)} floats shown. Color = surface temperature.")
 
 # ── Tab 2: Float Explorer ─────────────────────────────────────────────────────
 with tab2:
-    fig_track = go.Figure()
-fig_track.add_trace(go.Scattergeo(
-    lat=profiles_df['latitude'],
-    lon=profiles_df['longitude'],
-    mode='lines+markers',
-    line=dict(width=1.5, color='#4a9eff'),
-    marker=dict(
-        size=5,
-        color=profiles_df['surface_temp'],
-        colorscale='Plasma',
-        showscale=True,
-        colorbar=dict(title="SST °C", thickness=10, len=0.5)
-    ),
-    text=[f"Profile {r['profile_idx']}<br>{r['measurement_date']}<br>SST: {r['surface_temp']:.1f}°C"
-          for _, r in profiles_df.iterrows()],
-    hoverinfo='text'
-))
-fig_track.update_geos(
-    fitbounds="locations",
-    showland=True, landcolor='#1a1a2e',
-    showocean=True, oceancolor='#0d2137',
-    showcoastlines=True, coastlinecolor='#4a9eff',
-    showcountries=False,
-    showframe=False
-)
-fig_track.update_layout(
-    height=350,
-    margin=dict(l=0, r=0, t=30, b=0),
-    title=f"Float {selected} Track",
-    paper_bgcolor='rgba(0,0,0,0)'
-)
+    st.subheader("Explore Individual Float")
+    floats_df = get_float_list()
+
+    if "selected_float" not in st.session_state:
+        st.session_state.selected_float = floats_df['float_id'].iloc[0]
+
+    selected = st.selectbox(
+        "Select Float",
+        floats_df['float_id'].tolist(),
+        index=floats_df['float_id'].tolist().index(st.session_state.selected_float),
+        format_func=lambda x: f"Float {x} ({floats_df[floats_df['float_id']==x]['profile_count'].values[0]} profiles)",
+        key="float_selector"
+    )
+    st.session_state.selected_float = selected
+
+    profiles_df = get_float_profiles(selected)
+    if profiles_df.empty:
+        st.warning("No profiles found.")
+    else:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            fig_track = go.Figure()
+            fig_track.add_trace(go.Scattergeo(
+                lat=profiles_df['latitude'],
+                lon=profiles_df['longitude'],
+                mode='lines+markers',
+                line=dict(width=1.5, color='#4a9eff'),
+                marker=dict(
+                    size=5,
+                    color=profiles_df['surface_temp'],
+                    colorscale='Plasma',
+                    showscale=True,
+                    colorbar=dict(title="SST °C", thickness=10, len=0.5)
+                ),
+                text=[f"Profile {r['profile_idx']}<br>{r['measurement_date']}<br>SST: {r['surface_temp']:.1f}°C"
+                      for _, r in profiles_df.iterrows()],
+                hoverinfo='text'
+            ))
+            fig_track.update_geos(
+                fitbounds="locations",
+                showland=True, landcolor='#1a1a2e',
+                showocean=True, oceancolor='#0d2137',
+                showcoastlines=True, coastlinecolor='#4a9eff',
+                showcountries=False,
+                showframe=False
+            )
+            fig_track.update_layout(
+                height=350,
+                margin=dict(l=0, r=0, t=30, b=0),
+                title=f"Float {selected} Track",
+                paper_bgcolor='rgba(0,0,0,0)'
+            )
+            st.plotly_chart(fig_track, use_container_width=True)
+
+        with col2:
+            fig_ts = go.Figure()
+            fig_ts.add_trace(go.Scatter(
+                x=profiles_df['measurement_date'],
+                y=profiles_df['surface_temp'],
+                mode='lines+markers',
+                line=dict(color='#ff6b6b', width=1.5),
+                marker=dict(size=4),
+                name='SST'
+            ))
+            fig_ts.update_layout(
+                title=f"Float {selected} — Surface Temperature",
+                xaxis_title="Date", yaxis_title="SST (°C)",
+                height=350, paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='#0d1117', font=dict(color='white')
+            )
+            st.plotly_chart(fig_ts, use_container_width=True)
+
+        st.subheader("Ocean Layer Structure")
+        latest_idx = profiles_df['profile_idx'].max()
+        computed = get_computed_profile(selected, latest_idx)
+
+        if not computed.empty:
+            row = computed.iloc[0]
+
+            mld   = float(row['mixed_layer_depth'])        if row['mixed_layer_depth']        and float(row['mixed_layer_depth'])   < 450 else None
+            therm = float(row['thermocline_depth'])        if row['thermocline_depth']        and float(row['thermocline_depth'])   < 900 else None
+            blt   = float(row['barrier_layer_thickness'])  if row['barrier_layer_thickness']  and not pd.isna(float(row['barrier_layer_thickness'])) else None
+            tchp  = float(row['tchp_kj_cm2'])              if row['tchp_kj_cm2']              and not pd.isna(float(row['tchp_kj_cm2'])) else None
+            ild   = float(row['isothermal_layer_depth'])   if row['isothermal_layer_depth']   and float(row['isothermal_layer_depth']) < 900 else None
+            d20   = float(row['d20_depth'])                if row['d20_depth']                and not pd.isna(float(row['d20_depth'])) else None
+
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("Mixed Layer Depth",  f"{mld:.1f} m"       if mld   else "N/A")
+            d2.metric("Thermocline Depth",  f"{therm:.1f} m"     if therm else "N/A")
+            d3.metric("Barrier Layer",      f"{blt:.1f} m"       if blt   else "N/A")
+            d4.metric("TCHP",               f"{tchp:.2f} kJ/cm²" if tchp  else "N/A")
+
+            fig_depth = go.Figure()
+            layers = {"Mixed Layer": mld, "Isothermal Layer": ild, "Thermocline": therm, "D20": d20}
+            colors = ['#4a9eff', '#45b7d1', '#ff9f43', '#ff6b6b']
+            for (name, depth), color in zip(layers.items(), colors):
+                if depth:
+                    fig_depth.add_trace(go.Bar(
+                        x=[depth], y=[name], orientation='h',
+                        marker_color=color, name=name,
+                        text=[f"{depth:.1f} m"], textposition='outside'
+                    ))
+            fig_depth.update_layout(
+                title="Ocean Layer Depths (latest profile)",
+                xaxis_title="Depth (m)", height=250,
+                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='#0d1117',
+                font=dict(color='white'), showlegend=False
+            )
+            st.plotly_chart(fig_depth, use_container_width=True)
 
 # ── Tab 3: Regional Stats ─────────────────────────────────────────────────────
 with tab3:
