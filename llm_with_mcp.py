@@ -72,6 +72,7 @@ Region bounding boxes:
   Indian Ocean:   lat -70-30, lon 20-120
 
 CRITICAL SQL RULES:
+-Data available from 2002 to 2026. Always use the full range unless the user specifies otherwise. Never hardcode an end date like 2021.
 - Cast AFTER aggregation: ROUND(AVG(col)::numeric, 2) NOT ROUND(AVG(col::numeric, 2))
 - Cast bare columns:      ROUND(col::numeric, 2)
 - Always LIMIT 20 rows maximum
