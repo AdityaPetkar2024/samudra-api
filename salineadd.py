@@ -1,6 +1,7 @@
 """
 Samudra Dashboard — Streamlit
 Uses Railway PostgreSQL + OpenAI chat
+Light theme — per Dr. Shankar (CSIR-NIO) feedback
 """
 
 import streamlit as st
@@ -14,9 +15,9 @@ from llm_with_mcp import chat_with_tools
 st.set_page_config(page_title="Samudra — Indian Ocean Intelligence", page_icon="🌊", layout="wide")
 
 st.markdown("""<style>
-.stMetric { background: #0d1b2a; padding: 10px; border-radius: 8px; }
-h1 { color: #4a9eff; }
-h2 { color: #4a9eff; }
+.stMetric { background: #f0f4ff; padding: 10px; border-radius: 8px; border: 1px solid #d0e0ff; }
+h1 { color: #1a56a0; }
+h2 { color: #1a56a0; }
 </style>""", unsafe_allow_html=True)
 
 st.title("🌊 Samudra — Indian Ocean Intelligence")
@@ -155,13 +156,16 @@ with tab1:
         fig.update_geos(
             center=dict(lat=5, lon=75), projection_scale=3,
             projection_type='natural earth',
-            showland=True, landcolor='#1a1a2e',
-            showocean=True, oceancolor='#0d2137',
-            showcoastlines=True, coastlinecolor='#4a9eff',
-            showcountries=False,
+            showland=True, landcolor='#e8e8e8',
+            showocean=True, oceancolor='#cce5ff',
+            showcoastlines=True, coastlinecolor='#336699',
+            showcountries=True, countrycolor='#aaaaaa',
             showframe=False
         )
-        fig.update_layout(height=580, margin=dict(l=0, r=0, t=0, b=0), paper_bgcolor='rgba(0,0,0,0)')
+        fig.update_layout(
+            height=580, margin=dict(l=0, r=0, t=0, b=0),
+            paper_bgcolor='white'
+        )
         st.plotly_chart(fig, use_container_width=True)
         st.caption(f"{len(positions)} floats shown. Color = surface temperature.")
 
@@ -194,7 +198,7 @@ with tab2:
                 lat=profiles_df['latitude'],
                 lon=profiles_df['longitude'],
                 mode='lines+markers',
-                line=dict(width=1.5, color='#4a9eff'),
+                line=dict(width=1.5, color='#1a56a0'),
                 marker=dict(
                     size=5,
                     color=profiles_df['surface_temp'],
@@ -208,17 +212,17 @@ with tab2:
             ))
             fig_track.update_geos(
                 fitbounds="locations",
-                showland=True, landcolor='#1a1a2e',
-                showocean=True, oceancolor='#0d2137',
-                showcoastlines=True, coastlinecolor='#4a9eff',
-                showcountries=False,
+                showland=True, landcolor='#e8e8e8',
+                showocean=True, oceancolor='#cce5ff',
+                showcoastlines=True, coastlinecolor='#336699',
+                showcountries=True, countrycolor='#aaaaaa',
                 showframe=False
             )
             fig_track.update_layout(
                 height=350,
                 margin=dict(l=0, r=0, t=30, b=0),
                 title=f"Float {selected} Track",
-                paper_bgcolor='rgba(0,0,0,0)'
+                paper_bgcolor='white'
             )
             st.plotly_chart(fig_track, use_container_width=True)
 
@@ -228,15 +232,19 @@ with tab2:
                 x=profiles_df['measurement_date'],
                 y=profiles_df['surface_temp'],
                 mode='lines+markers',
-                line=dict(color='#ff6b6b', width=1.5),
+                line=dict(color='#e63946', width=1.5),
                 marker=dict(size=4),
                 name='SST'
             ))
             fig_ts.update_layout(
                 title=f"Float {selected} — Surface Temperature",
                 xaxis_title="Date", yaxis_title="SST (°C)",
-                height=350, paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='#0d1117', font=dict(color='white')
+                height=350,
+                paper_bgcolor='white',
+                plot_bgcolor='#f8f9fa',
+                font=dict(color='#222222'),
+                xaxis=dict(gridcolor='#dddddd'),
+                yaxis=dict(gridcolor='#dddddd'),
             )
             st.plotly_chart(fig_ts, use_container_width=True)
 
@@ -262,7 +270,7 @@ with tab2:
 
             fig_depth = go.Figure()
             layers = {"Mixed Layer": mld, "Isothermal Layer": ild, "Thermocline": therm, "D20": d20}
-            colors = ['#4a9eff', '#45b7d1', '#ff9f43', '#ff6b6b']
+            colors = ['#1a56a0', '#2196f3', '#ff9800', '#e63946']
             for (name, depth), color in zip(layers.items(), colors):
                 if depth:
                     fig_depth.add_trace(go.Bar(
@@ -273,8 +281,11 @@ with tab2:
             fig_depth.update_layout(
                 title="Ocean Layer Depths (latest profile)",
                 xaxis_title="Depth (m)", height=250,
-                paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='#0d1117',
-                font=dict(color='white'), showlegend=False
+                paper_bgcolor='white',
+                plot_bgcolor='#f8f9fa',
+                font=dict(color='#222222'),
+                xaxis=dict(gridcolor='#dddddd'),
+                showlegend=False
             )
             st.plotly_chart(fig_depth, use_container_width=True)
 
@@ -317,21 +328,23 @@ with tab3:
         fig_clim.add_trace(go.Scatter(
             x=clim['month'], y=clim['avg_sst'],
             mode='lines+markers', name='SST (°C)',
-            line=dict(color='#ff6b6b', width=2)
+            line=dict(color='#e63946', width=2)
         ))
         fig_clim.add_trace(go.Scatter(
             x=clim['month'], y=clim['avg_chl'],
             mode='lines+markers', name='CHL (mg/m³)',
-            line=dict(color='#2ecc71', width=2),
+            line=dict(color='#2a9d8f', width=2),
             yaxis='y2'
         ))
         fig_clim.update_layout(
             title=f"{region} — Monthly Climatology (2024)",
-            xaxis=dict(title="Month", tickmode='linear', tick0=1, dtick=1),
-            yaxis=dict(title="SST (°C)", color='#ff6b6b'),
-            yaxis2=dict(title="Chlorophyll (mg/m³)", overlaying='y', side='right', color='#2ecc71'),
-            height=350, paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='#0d1117', font=dict(color='white'),
+            xaxis=dict(title="Month", tickmode='linear', tick0=1, dtick=1, gridcolor='#dddddd'),
+            yaxis=dict(title="SST (°C)", color='#e63946', gridcolor='#dddddd'),
+            yaxis2=dict(title="Chlorophyll (mg/m³)", overlaying='y', side='right', color='#2a9d8f'),
+            height=350,
+            paper_bgcolor='white',
+            plot_bgcolor='#f8f9fa',
+            font=dict(color='#222222'),
             legend=dict(x=0.01, y=0.99)
         )
         st.plotly_chart(fig_clim, use_container_width=True)
