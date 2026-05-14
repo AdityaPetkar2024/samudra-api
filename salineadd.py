@@ -159,7 +159,7 @@ with tab1:
             showland=True, landcolor='#e8e8e8',
             showocean=True, oceancolor='#cce5ff',
             showcoastlines=True, coastlinecolor='#336699',
-            showcountries=True, countrycolor='#aaaaaa',
+            showcountries=False,
             showframe=False
         )
         fig.update_layout(
@@ -215,7 +215,7 @@ with tab2:
                 showland=True, landcolor='#e8e8e8',
                 showocean=True, oceancolor='#cce5ff',
                 showcoastlines=True, coastlinecolor='#336699',
-                showcountries=True, countrycolor='#aaaaaa',
+                showcountries=False,
                 showframe=False
             )
             fig_track.update_layout(
