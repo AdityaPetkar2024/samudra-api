@@ -23,24 +23,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if DATABASE_URL:
     result = urlparse(DATABASE_URL)
     DB_CONFIG = {
-        "host":     result.hostname,
-        "database": result.path[1:],
-        "user":     result.username,
-        "password": result.password,
-        "port":     result.port
+        "host":     os.getenv("DB_HOST") or result.hostname,
+        "database": os.getenv("DB_NAME") or result.path[1:],
+        "user":     os.getenv("DB_USER") or result.username,
+        "password": os.getenv("DB_PASSWORD") or result.password,
+        "port":     int(os.getenv("DB_PORT") or result.port)
     }
 else:
     DB_CONFIG = {
-        "host":     "localhost",
-        "database": "argo_db12",
-        "user":     "argo_user1",
-        "password": "argo123"
+        "host":     os.getenv("DB_HOST", "localhost"),
+        "database": os.getenv("DB_NAME", "argo_db12"),
+        "user":     os.getenv("DB_USER", "argo_user1"),
+        "password": os.getenv("DB_PASSWORD", "argo123"),
+        "port":     int(os.getenv("DB_PORT", 5432))
     }
 
 COPERNICUS_USER = os.getenv("COPERNICUS_USERNAME")
