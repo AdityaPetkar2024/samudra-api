@@ -16,7 +16,15 @@ from openai import OpenAI
 # ── DB config ─────────────────────────────────────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-if DATABASE_URL:
+if os.getenv("DB_HOST"):
+    DB_CONFIG = {
+        "host":     os.getenv("DB_HOST"),
+        "database": os.getenv("DB_NAME", "postgres"),
+        "user":     os.getenv("DB_USER", "postgres"),
+        "password": os.getenv("DB_PASSWORD"),
+        "port":     int(os.getenv("DB_PORT", 5432))
+    }
+elif DATABASE_URL:
     r = urlparse(DATABASE_URL)
     DB_CONFIG = {
         "host": r.hostname, "database": r.path[1:],
