@@ -10,15 +10,92 @@ import pandas as pd
 import numpy as np
 import os
 from sqlalchemy import create_engine
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from llm_with_mcp import chat_with_tools
 
 st.set_page_config(page_title="Samudra — Indian Ocean Intelligence", page_icon="🌊", layout="wide")
 
 st.markdown("""<style>
+/* Theme variables - will be overridden by JavaScript */
+:root {
+  --bg-main: #050505;
+  --bg-card: #0B0D0D;
+  --bg-secondary: #111414;
+  --border-color: #242828;
+  --text-primary: #F2F4F3;
+  --text-muted: #858C89;
+  --accent-green: #6BE7A0;
+  --accent-teal: #4FC9A0;
+  --accent-red: #E87575;
+}
+
+/* Light mode */
+.light-mode {
+  --bg-main: #050505;
+  --bg-card: #0B0D0D;
+  --bg-secondary: #111414;
+  --border-color: #242828;
+  --text-primary: #F2F4F3;
+  --text-muted: #858C89;
+}
+
+/* Dark mode */
+.dark-mode {
+  --bg-main: #121212;
+  --bg-card: #1e1e1e;
+  --bg-secondary: #252526;
+  --border-color: #3a3a3c;
+  --text-primary: #E0E0E0;
+  --text-muted: #B0B0B0;
+}
+
+/* Metric Card */
 .stMetric { background: #f0f4ff; padding: 10px; border-radius: 8px; border: 1px solid #d0e0ff; }
 h1 { color: #1a56a0; }
 h2 { color: #1a56a0; }
+
+/* Plot container */
+.js-plotly-plot .plotly .main-svg {
+  background: var(--bg-card) !important;
+}
+
+/* Button hover */
+.st-button:hover {
+  background: #181c1c;
+  border-color: rgba(107, 231, 160, 0.25);
+  color: var(--accent-green);
+}
+
+/* Theme toggle button */
+#theme-toggle {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 1000;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  padding: 0.5rem 1rem;
+  font-size: 1.2rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
 </style>""", unsafe_allow_html=True)
+
+# Theme selector in sidebar
+theme_options = ["Light", "Dark"]
+selected_theme = st.sidebar.radio("Theme", theme_options, index=0, help="Select light or dark mode")
+if "streamlit_theme" not in st.session_state:
+    st.session_state.streamlit_theme = "light"
+if selected_theme != st.session_state.streamlit_theme:
+    st.session_state.streamlit_theme = selected_theme
+
+# Apply theme class to body
+theme_class = st.session_state.streamlit_theme
+st.markdown(f"""<script>document.body.classList.add("{theme_class}-mode");</script>""", unsafe_allow_html=True)
 
 st.title("🌊 Samudra — Indian Ocean Intelligence")
 st.markdown("INCOIS Argo floats · Copernicus satellite · IOTC tuna catch")
@@ -154,12 +231,11 @@ with tab1:
             hoverinfo='text',
         ))
         fig.update_geos(
-            center=dict(lat=5, lon=75), projection_scale=3,
-            projection_type='natural earth',
-            showland=True, landcolor='#e8e8e8',
-            showocean=True, oceancolor='#cce5ff',
-            showcoastlines=True, coastlinecolor='#336699',
-            showcountries=False,
+            center=dict(lat=5, lon=75),
+            projection_scale=3,
+            showland=True, landcolor='#d4e6f1',
+            showocean=True, oceancolor='#b3e5fc',
+            showcoastlines=True, coastlinecolor='#0d47a1',
             showframe=False
         )
         fig.update_layout(
@@ -210,11 +286,11 @@ with tab2:
                       for _, r in profiles_df.iterrows()],
                 hoverinfo='text'
             ))
-            fig_track.update_geos(
+fig_track.update_geos(
                 fitbounds="locations",
-                showland=True, landcolor='#e8e8e8',
-                showocean=True, oceancolor='#cce5ff',
-                showcoastlines=True, coastlinecolor='#336699',
+                showland=True, landcolor='#d4e6f1',
+                showocean=True, oceancolor='#b3e5fc',
+                showcoastlines=True, coastlinecolor='#0d47a1',
                 showcountries=False,
                 showframe=False
             )
