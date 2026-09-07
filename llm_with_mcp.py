@@ -12,6 +12,9 @@ from urllib.parse import urlparse
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
 from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ── DB config ─────────────────────────────────────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -36,7 +39,12 @@ else:
         "user": "argo_user1", "password": "argo123"
     }
 
-client     = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+def get_openai_client():
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY is missing. Please set your OPENAI_API_KEY in the .env file.")
+    return OpenAI(api_key=api_key)
+
 geolocator = Nominatim(user_agent="samudra_v1")
 
 SCHEMA = """
@@ -187,6 +195,7 @@ def execute_sql(query: str) -> list:
 
 
 def llm_call(messages: list) -> str:
+    client = get_openai_client()
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=messages,
@@ -198,22 +207,30 @@ def llm_call(messages: list) -> str:
 
 
 def chat_with_tools(user_message: str, history: list = []) -> str:
+    try:
+        client = get_openai_client()
+    except Exception as e:
+        return f"⚠️ OpenAI Configuration Error: {str(e)}"
+
     # Step 1 — geocode place names
     geo_context   = ""
-    place_extract = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content":
-            f"Extract any place name from this text. Reply ONLY 'PLACE: <name>' or 'NO_PLACE'.\nText: {user_message}"}],
-        max_tokens=30, temperature=0,
-    ).choices[0].message.content.strip()
+    try:
+        place_extract = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content":
+                f"Extract any place name from this text. Reply ONLY 'PLACE: <name>' or 'NO_PLACE'.\nText: {user_message}"}],
+            max_tokens=30, temperature=0,
+        ).choices[0].message.content.strip()
 
-    if place_extract.startswith("PLACE:"):
-        place = place_extract.replace("PLACE:", "").strip()
-        lat, lon, _ = geocode_place(place)
-        if lat:
-            geo_context = f"\n[GEOCODED: '{place}' -> lat={lat:.4f}, lon={lon:.4f}]"
-        else:
-            geo_context = f"\n[GEOCODE FAILED for '{place}']"
+        if place_extract.startswith("PLACE:"):
+            place = place_extract.replace("PLACE:", "").strip()
+            lat, lon, _ = geocode_place(place)
+            if lat:
+                geo_context = f"\n[GEOCODED: '{place}' -> lat={lat:.4f}, lon={lon:.4f}]"
+            else:
+                geo_context = f"\n[GEOCODE FAILED for '{place}']"
+    except Exception:
+        pass
 
     # Step 2 — generate SQL
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -221,7 +238,10 @@ def chat_with_tools(user_message: str, history: list = []) -> str:
         messages.append(msg)
     messages.append({"role": "user", "content": f"{user_message}{geo_context}"})
 
-    plan_raw = llm_call(messages)
+    try:
+        plan_raw = llm_call(messages)
+    except Exception as e:
+        return f"⚠️ OpenAI API Error: {str(e)}"
 
     # Step 3 — parse
     try:
@@ -259,9 +279,12 @@ def chat_with_tools(user_message: str, history: list = []) -> str:
             f"Give a clear, concise answer."}
     ]
 
-    return client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=synthesis,
-        temperature=0.2,
-        max_tokens=600,
-    ).choices[0].message.content
+    try:
+        return client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=synthesis,
+            temperature=0.2,
+            max_tokens=600,
+        ).choices[0].message.content
+    except Exception as e:
+        return f"⚠️ Synthesis Error: {str(e)}"

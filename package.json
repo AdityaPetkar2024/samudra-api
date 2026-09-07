@@ -1,0 +1,10 @@
+{
+  "name": "samudra-app",
+  "version": "1.0.0",
+  "description": "Samudra Indian Ocean Intelligence API & React Frontend",
+  "scripts": {
+    "dev:backend": "uvicorn main:app --reload",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build:frontend": "npm --prefix frontend run build"
+  }
+}

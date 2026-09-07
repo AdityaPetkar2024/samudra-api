@@ -10,6 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from concurrent.futures import ThreadPoolExecutor
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from pydantic import BaseModel
+from typing import List, Dict, Any, Optional
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI(
     title="Samudra Ocean Intelligence API",
@@ -59,6 +64,9 @@ if REDIS_URL:
 API_KEYS = {"test-key-samudra-v1": "free"}
 
 def get_conn():
+    db_url = os.getenv("DATABASE_URL")
+    if db_url:
+        return psycopg2.connect(db_url, cursor_factory=RealDictCursor)
     return psycopg2.connect(**DB_CONFIG, cursor_factory=RealDictCursor)
 
 def verify_key(api_key: str):
@@ -534,3 +542,182 @@ def health():
     finally:
         cur.close()
         conn.close()
+
+
+# =============================================================================
+# REACT FRONTEND DASHBOARD ENDPOINTS
+# =============================================================================
+
+class ChatRequest(BaseModel):
+    message: str
+    history: Optional[List[Dict[str, Any]]] = []
+
+@app.get("/api/stats", tags=["Dashboard"])
+def get_dashboard_stats():
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT COUNT(*) as c FROM floats")
+        floats_count = cur.fetchone()["c"]
+        cur.execute("SELECT COUNT(*) as c FROM profiles")
+        profiles_count = cur.fetchone()["c"]
+        cur.execute("SELECT COUNT(*) as c FROM computed_profiles")
+        computed_count = cur.fetchone()["c"]
+        return {
+            "floats_count": floats_count,
+            "profiles_count": profiles_count,
+            "computed_count": computed_count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/api/floats/positions", tags=["Dashboard"])
+def get_float_positions():
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT p.float_id,
+                   ROUND(p.latitude::numeric, 2)     as latitude,
+                   ROUND(p.longitude::numeric, 2)    as longitude,
+                   ROUND(p.surface_temp::numeric, 1) as surface_temp
+            FROM profiles p
+            INNER JOIN (
+                SELECT float_id, MAX(profile_idx) as latest
+                FROM profiles GROUP BY float_id
+            ) l ON p.float_id = l.float_id AND p.profile_idx = l.latest
+            WHERE p.latitude IS NOT NULL AND p.longitude IS NOT NULL
+              AND p.surface_temp BETWEEN 0 AND 35
+        """)
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/api/floats", tags=["Dashboard"])
+def get_float_list():
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT float_id, COUNT(*) as profile_count
+            FROM profiles
+            GROUP BY float_id
+            ORDER BY profile_count DESC
+        """)
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/api/floats/{float_id}/track", tags=["Dashboard"])
+def get_float_track(float_id: str):
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT profile_idx, latitude, longitude,
+                   surface_temp, surface_salinity, max_depth,
+                   measurement_date::text as measurement_date
+            FROM profiles
+            WHERE float_id = %s
+            ORDER BY profile_idx
+        """, (float_id,))
+        rows = cur.fetchall()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/api/floats/{float_id}/layer-depths", tags=["Dashboard"])
+def get_float_layer_depths(float_id: str):
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT profile_idx, mixed_layer_depth, isothermal_layer_depth, barrier_layer_thickness,
+                   thermocline_depth, d20_depth, tchp_kj_cm2,
+                   conservative_temp, absolute_salinity, potential_density_surface
+            FROM computed_profiles
+            WHERE float_id = %s
+            ORDER BY profile_idx DESC
+            LIMIT 1
+        """, (float_id,))
+        row = cur.fetchone()
+        return dict(row) if row else {}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cur.close()
+        conn.close()
+
+@app.get("/api/region/{region}/analytics", tags=["Dashboard"])
+def get_region_analytics(region: str):
+    bounds = {
+        "Arabian Sea":    (5, 25, 50, 78, 15, 65),
+        "Bay of Bengal":  (5, 22, 78, 100, 15, 88),
+        "Equatorial IO":  (-10, 10, 40, 110, 0, 75),
+        "Southern Ocean": (-70, -30, 0, 150, -40, 75),
+    }
+    if region not in bounds:
+        region = "Arabian Sea"
+    lat1, lat2, lon1, lon2, lat_c, lon_c = bounds[region]
+
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute("""
+            SELECT COUNT(DISTINCT float_id) as floats,
+                   ROUND(AVG(mixed_layer_depth)::numeric, 1) as avg_mld,
+                   ROUND(AVG(thermocline_depth)::numeric, 1) as avg_thermocline,
+                   ROUND(AVG(tchp_kj_cm2)::numeric, 2)       as avg_tchp,
+                   ROUND(AVG(conservative_temp)::numeric, 2) as avg_temp,
+                   ROUND(AVG(absolute_salinity)::numeric, 3) as avg_salinity
+            FROM computed_profiles
+            WHERE latitude  BETWEEN %s AND %s
+              AND longitude BETWEEN %s AND %s
+              AND mixed_layer_depth < 500
+              AND thermocline_depth < 1000
+        """, (lat1, lat2, lon1, lon2))
+        stats = dict(cur.fetchone() or {})
+
+        cur.execute("""
+            SELECT month, avg_sst, avg_ssh, avg_chl
+            FROM copernicus_monthly
+            WHERE latitude  BETWEEN %s AND %s
+              AND longitude BETWEEN %s AND %s
+            ORDER BY month
+        """, (lat_c-0.2, lat_c+0.2, lon_c-0.2, lon_c+0.2))
+        clim_rows = cur.fetchall()
+
+        return {
+            "region": region,
+            "stats": stats,
+            "climatology": [dict(r) for r in clim_rows]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cur.close()
+        conn.close()
+
+@app.post("/api/chat", tags=["Dashboard"])
+def api_chat(req: ChatRequest):
+    try:
+        from llm_with_mcp import chat_with_tools
+        reply = chat_with_tools(req.message, req.history or [])
+        return {"response": reply}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
