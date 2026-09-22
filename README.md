@@ -1,6 +1,6 @@
-# Samudra — Indian Ocean Intelligence API
+# Samudra:Indian Ocean Intelligence API
 
-A REST API for Indian Ocean oceanographic data, built on 90,000+ Argo float profiles from INCOIS (2002–2026) with real-time TEOS-10 parameter computation.
+A REST API for Indian Ocean oceanographic data, built on 90,000+ Argo float profiles from INCOIS (2002-2026) with real-time TEOS-10 parameter computation.
 
 **[Live API](https://samudra-api.onrender.com/docs) · [Dashboard](https://samudra-api-1.onrender.com)**
 
