@@ -47,6 +47,14 @@ class Tally:
         self.bad_location = 0
         self.stuck_temp = 0
         self.stuck_psal = 0
+        self.pres_nonmono = 0
+        self.spikes_temp = 0
+        self.spikes_psal = 0
+        self.grad_temp = 0
+        self.grad_psal = 0
+        self.density_inv = 0
+        self.rollover_temp = 0
+        self.rollover_psal = 0
         self.flags = {p: Counter() for p in ("pres", "temp", "psal")}
         self.profiles_with_bad = 0
 
@@ -64,6 +72,20 @@ class Tally:
             self.stuck_temp += 1
         if stuck.get("psal_stuck"):
             self.stuck_psal += 1
+
+        self.pres_nonmono += summary.get("test8_pressure", {}).get(
+            "pres_non_monotonic", 0)
+        spike = summary.get("test9_spike", {})
+        self.spikes_temp += spike.get("temp_spikes", 0)
+        self.spikes_psal += spike.get("psal_spikes", 0)
+        grad = summary.get("test11_gradient", {})
+        self.grad_temp += grad.get("temp_gradient", 0)
+        self.grad_psal += grad.get("psal_gradient", 0)
+        self.density_inv += summary.get("test14_density", {}).get(
+            "density_inversions", 0)
+        roll = summary.get("test12_rollover", {})
+        self.rollover_temp += roll.get("temp_rollover", 0)
+        self.rollover_psal += roll.get("psal_rollover", 0)
 
         has_bad = False
         for param, counts in summary["flags"].items():
@@ -95,6 +117,20 @@ class Tally:
               f"{self.stuck_temp:,} profiles")
         print("  Test 13 stuck salinity       : "
               f"{self.stuck_psal:,} profiles")
+        print("  Test 8  pressure non-monotonic : "
+              f"{self.pres_nonmono:,} levels")
+        print("  Test 9  temperature spikes     : "
+              f"{self.spikes_temp:,} levels")
+        print("  Test 9  salinity spikes        : "
+              f"{self.spikes_psal:,} levels")
+        print("  Test 12 temperature rollover   : "
+              f"{self.rollover_temp:,} levels")
+        print("  Test 12 salinity rollover      : "
+              f"{self.rollover_psal:,} levels")
+        print("  Test 11 gradient (obsolete, not flagged): "
+              f"{self.grad_temp:,} temp / {self.grad_psal:,} psal levels")
+        print("  Test 14 density inversions     : "
+              f"{self.density_inv:,} levels")
         print()
         print("  Level flags (Argo QC convention):")
         names = {0: "no QC", 1: "good", 2: "prob good",

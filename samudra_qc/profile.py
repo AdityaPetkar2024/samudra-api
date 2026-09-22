@@ -58,6 +58,11 @@ class Profile:
     # (Tests 2 and 3 set these). Kept separate so level flags stay level flags.
     profile_qc: dict = field(default_factory=dict)
 
+    # Which test raised each level flag, so a report can say why a level was
+    # rejected rather than guessing. Keyed by parameter, then by test name,
+    # holding a boolean mask over levels.
+    flag_reasons: dict = field(default_factory=dict)
+
     def __post_init__(self):
         self.pres = np.asarray(self.pres, dtype=float)
         self.temp = np.asarray(self.temp, dtype=float)
@@ -85,18 +90,30 @@ class Profile:
     def n_levels(self) -> int:
         return len(self.pres)
 
-    def raise_flag(self, param: str, mask, flag: int):
+    def raise_flag(self, param: str, mask, flag: int, reason: str = None):
         """
         Raise the QC flag for the given parameter where `mask` is True.
 
         Per the Argo QC manual, a flag set by one test must not be lowered by
         a later test, so this only ever increases a flag value. Missing values
         (flag 9) are left alone.
+
+        `reason` names the test responsible, and is recorded so that a report
+        can state why a level was rejected.
         """
         arr = getattr(self, f"{param}_qc")
         mask = np.asarray(mask, dtype=bool)
         target = mask & (arr != QC_MISSING) & (arr < flag)
         arr[target] = flag
+
+        if reason is not None and target.any():
+            by_param = self.flag_reasons.setdefault(param, {})
+            existing = by_param.get(reason)
+            by_param[reason] = target if existing is None else (existing | target)
+
+    def reasons_for(self, param: str) -> dict:
+        """Test name to level mask, for levels this parameter was flagged."""
+        return self.flag_reasons.get(param, {})
 
     def flag_counts(self, param: str) -> dict:
         """Count of levels at each flag value for one parameter."""

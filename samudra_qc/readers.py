@@ -52,12 +52,21 @@ def read_argo_profile(db_config, float_id, profile_idx):
         if not rows:
             return None
 
+        # Deduplicate: ingestion sometimes inserted the surface level
+        # (pressure=0) hundreds of times per profile.
+        seen = set()
+        deduped = []
+        for r in rows:
+            p = r["pressure"]
+            if p not in seen:
+                seen.add(p)
+                deduped.append(r)
+        rows = deduped
+
         return Profile(
             pres=[r["pressure"] if r["pressure"] is not None else np.nan for r in rows],
             temp=[r["temperature"] if r["temperature"] is not None else np.nan for r in rows],
-            # Argo NetCDF ingestion wrote 0.0 where salinity was absent. Ocean
-            # salinity is never 0 PSU, so exact zeros are missing, not measured.
-            psal=[np.nan if r["salinity"] is None or r["salinity"] == 0 else r["salinity"]for r in rows],
+            psal=[r["salinity"] if r["salinity"] is not None else np.nan for r in rows],
             lat=float(head["latitude"]),
             lon=float(head["longitude"]),
             juld=head["measurement_date"],
@@ -115,12 +124,23 @@ def iter_argo_profiles(db_config, limit=None, region=None):
                 rows = lev.fetchall()
                 if not rows:
                     continue
+
+                # Ingestion artifact: the surface level (pressure=0) was
+                # sometimes inserted hundreds of times. Keep only the
+                # first occurrence at each pressure.
+                seen = set()
+                deduped = []
+                for r in rows:
+                    p = r["pressure"]
+                    if p not in seen:
+                        seen.add(p)
+                        deduped.append(r)
+                rows = deduped
+
                 yield Profile(
                     pres=[r["pressure"] if r["pressure"] is not None else np.nan for r in rows],
                     temp=[r["temperature"] if r["temperature"] is not None else np.nan for r in rows],
-                    # Argo NetCDF ingestion wrote 0.0 where salinity was absent. Ocean
-                    # salinity is never 0 PSU, so exact zeros are missing, not measured.
-                    psal=[np.nan if r["salinity"] is None or r["salinity"] == 0 else r["salinity"]for r in rows],
+                    psal=[r["salinity"] if r["salinity"] is not None else np.nan for r in rows],
                     lat=float(head["latitude"]),
                     lon=float(head["longitude"]),
                     juld=head["measurement_date"],
@@ -160,6 +180,7 @@ def iter_wod_ctd_profiles(filepath, limit=None):
             z = np.asarray(p.z(), dtype=float)
             t = np.asarray(p.t(), dtype=float)
             s = np.asarray(p.s(), dtype=float)
+
             # WOD returns 0.0 rather than NaN for channels that were not
             # measured. Ocean salinity is never 0 PSU, so exact zeros mean
             # "not measured" and must be treated as missing, not as bad data.
