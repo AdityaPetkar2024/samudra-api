@@ -1,4 +1,4 @@
-# Samudra:Indian Ocean Intelligence API
+# Samudra: Indian Ocean Intelligence API
 
 A REST API for Indian Ocean oceanographic data, built on 90,000+ Argo float profiles from INCOIS (2002-2026) with real-time TEOS-10 parameter computation.
 
@@ -29,12 +29,28 @@ Mixed Layer Depth · Isothermal Layer Depth · Barrier Layer Thickness · Thermo
 | `GET /ocean/float/{float_id}` | Individual Argo float data |
 | `GET /health` | API status |
 
+## Data Sources and Provenance
+
+Argo profile data is sourced directly from INCOIS GDAC as raw NetCDF files, not from gridded products. All oceanographic parameters (MLD, thermocline depth, BLT, TCHP, conservative temperature, absolute salinity, potential density) are computed from these raw profiles using GSW TEOS-10 v3.6.
+
+Copernicus Marine data is used in two distinct ways:
+- Monthly climatology (2.4M records, 2024) serves only as a baseline for satellite anomaly calculations
+- Live near-real-time SST, SSH, and chlorophyll values are pulled per query
+
+Gridded satellite products are interpolated and extrapolated fields, not direct observations, and should not be treated as measurements.
+
+## Data Limitations
+
+Argo float coverage is not uniform. Floats are not deployed near continental slopes and do not survive well in those regions, so coastal and shelf areas have sparse or no direct observations. Values returned for such regions derive largely from extrapolation from the open ocean interior and should be treated with caution.
+
+Users should not treat interpolated or gridded values as equivalent to in-situ measurements.
+
+## Quality Control
+
+A profile-level QC pipeline implementing the Argo Quality Control Manual v3.9 has been applied to the Argo and CTD data underlying this API. See `samudra_qc/` for the implementation and a full report of findings.
+
 ## Stack
 
 FastAPI · PostgreSQL (Supabase) · GSW TEOS-10 · Copernicus Marine API · Streamlit
-
-## Data Source
-
-Argo float data sourced from [INCOIS GDAC](https://incois.gov.in/portal/argo/argo.jsp). Publicly available but requires local ingestion — see the [Argo data access guide](https://argo.ucsd.edu/data/data-from-gdacs/) for setup.
 
 For questions or research collaboration, open an issue.
